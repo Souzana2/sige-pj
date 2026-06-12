@@ -14,6 +14,7 @@ if sys.stdout.encoding != 'utf-8':
     1. sync.py        → Sincroniza Excel com o MySQL
     2. ml_funcionarios.py → IA: Risco de saída dos funcionários
     3. ml_stock.py    → IA: Previsão de ruptura de stock
+    4. app.py         → Inicia o portal Streamlit
 
   Como usar:
       python orq.py
@@ -23,6 +24,7 @@ if sys.stdout.encoding != 'utf-8':
       python orq.py --so-ml            → corre apenas os modelos de IA
       python orq.py --so-ml-func       → corre apenas ML de funcionários
       python orq.py --so-ml-stock      → corre apenas ML de stock
+      python orq.py --sem-portal       → atualiza tudo mas não abre o portal
 ==============================================================
 """
 
@@ -358,6 +360,22 @@ def correr_ml_stock():
 
 
 # ──────────────────────────────────────────────────────────────
+# PASSO 4 — INICIAR PORTAL (app.py via Streamlit)
+# ──────────────────────────────────────────────────────────────
+def correr_streamlit():
+    secao(4, "INICIAR PORTAL DE ADMINISTRAÇÃO  (streamlit run app.py)")
+    try:
+        import subprocess
+        info("A iniciar o portal Streamlit...")
+        # Executa o Streamlit de forma síncrona/bloqueante para que o terminal fique ativo com o log
+        subprocess.run([sys.executable, "-m", "streamlit", "run", "app.py"])
+        return True
+    except Exception as e:
+        erro(f"Falhou ao iniciar o Streamlit!\n   Detalhe: {e}")
+        return False
+
+
+# ──────────────────────────────────────────────────────────────
 # MOTOR PRINCIPAL
 # ──────────────────────────────────────────────────────────────
 def main():
@@ -370,6 +388,7 @@ def main():
     correr_s  = "--so-ml" not in args and "--so-ml-func" not in args and "--so-ml-stock" not in args
     correr_mf = "--so-sync" not in args and "--so-ml-stock" not in args
     correr_ms = "--so-sync" not in args and "--so-ml-func"  not in args
+    correr_ui = "--so-sync" not in args and "--so-ml" not in args and "--so-ml-func" not in args and "--so-ml-stock" not in args and "--sem-portal" not in args
 
     # Flags explícitas têm prioridade
     if "--so-sync":
@@ -428,6 +447,8 @@ def main():
     print()
     if todos_ok:
         sucesso("PIPELINE COMPLETO - todos os sistemas actualizados!")
+        if correr_ui:
+            correr_streamlit()
     else:
         erro("PIPELINE TERMINADO COM ERROS - verifica os detalhes acima.")
 

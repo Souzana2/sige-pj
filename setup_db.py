@@ -1,26 +1,12 @@
-# -*- coding: utf-8 -*-
 """
 setup_db.py - GARANTIA DE BASE DE DADOS E TABELAS
-==============================================================
 Verifica se a base de dados 'sige_db' existe e, caso nao exista,
-cria-a do zero com todas as tabelas necessarias.
-Tambem verifica se colunas obrigatorias existem em tabelas ja
-criadas e adiciona-as automaticamente se estiverem a faltar.
-Chamado automaticamente pelo orq.py antes de qualquer outra operacao.
-==============================================================
+cria-a do zero com todas as tabelas necessarias, assim como as 
+colunas pertencentes.
 """
 
 import mysql.connector
-
-# ──────────────────────────────────────────────────────────────
-# CONFIGURAÇÃO DA LIGAÇÃO (espelha o conect.py)
-# ──────────────────────────────────────────────────────────────
-DB_CONFIG = dict(
-    host="localhost",
-    user="root",
-    password="",   # coloca a tua senha se tiver
-)
-DB_NAME = "sige_db"
+from conect import BASE_DB_CONFIG, DB_NAME
 
 # ──────────────────────────────────────────────────────────────
 # DDL DE CADA TABELA  (CREATE TABLE IF NOT EXISTS)
@@ -37,10 +23,10 @@ TABELAS = {
             data_admissao        DATE,
             salario              FLOAT DEFAULT 0,
             horas_extra          FLOAT DEFAULT 0,
-            assiduidade          FLOAT DEFAULT 0,
-            produtividade        FLOAT DEFAULT 0,
-            satisfacao           FLOAT DEFAULT 0,
-            avaliacao_desempenho FLOAT DEFAULT 0,
+            assiduidade          FLOAT DEFAULT 100,
+            produtividade        FLOAT DEFAULT 100,
+            satisfacao           FLOAT DEFAULT 100,
+            avaliacao_desempenho FLOAT DEFAULT 100,
             ativo                TINYINT DEFAULT 1,
             risco_saida          FLOAT DEFAULT 0
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -95,10 +81,37 @@ TABELAS = {
             FOREIGN KEY (id_produto) REFERENCES stock(id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """,
+
+    # ── 5. Movimentações (Histórico de Stock) ──────────────────
+    "movimentacoes": """
+        CREATE TABLE IF NOT EXISTS movimentacoes (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            id_produto INT,
+            tipo_movimento ENUM('Entrada', 'Saída') NOT NULL,
+            quantidade INT NOT NULL,
+            preco_unitario FLOAT NOT NULL,
+            data_hora DATETIME DEFAULT CURRENT_TIMESTAMP,
+            observacao VARCHAR(255),
+            FOREIGN KEY (id_produto) REFERENCES stock(id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
+
+    # ── 6. Pagamentos a Funcionários ──────────────────────────
+    "pagamentos_funcionarios": """
+        CREATE TABLE IF NOT EXISTS pagamentos_funcionarios (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            id_funcionario INT,
+            tipo_pagamento ENUM('Salário', 'Bónus', 'Adiantamento', 'Outro') NOT NULL,
+            valor FLOAT NOT NULL,
+            data_pagamento DATE NOT NULL,
+            observacao VARCHAR(255),
+            FOREIGN KEY (id_funcionario) REFERENCES funcionarios(id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
 }
 
 # Ordem de criação respeita as FK (pai antes de filho)
-ORDEM_CRIACAO = ["funcionarios", "financeiro_funcionarios", "stock", "financeiro"]
+ORDEM_CRIACAO = ["funcionarios", "financeiro_funcionarios", "stock", "financeiro", "movimentacoes", "pagamentos_funcionarios"]
 
 # ──────────────────────────────────────────────────────────────
 # COLUNAS OBRIGATÓRIAS POR TABELA
@@ -109,11 +122,11 @@ COLUNAS_OBRIGATORIAS = {
     "funcionarios": [
         ("ativo",                "TINYINT DEFAULT 1"),
         ("risco_saida",          "FLOAT DEFAULT 0"),
-        ("avaliacao_desempenho", "FLOAT DEFAULT 0"),
+        ("avaliacao_desempenho", "FLOAT DEFAULT 100"),
         ("horas_extra",          "FLOAT DEFAULT 0"),
-        ("assiduidade",          "FLOAT DEFAULT 0"),
-        ("produtividade",        "FLOAT DEFAULT 0"),
-        ("satisfacao",           "FLOAT DEFAULT 0"),
+        ("assiduidade",          "FLOAT DEFAULT 100"),
+        ("produtividade",        "FLOAT DEFAULT 100"),
+        ("satisfacao",           "FLOAT DEFAULT 100"),
     ],
     "stock": [
         ("ativo",            "TINYINT DEFAULT 1"),
@@ -168,7 +181,7 @@ def garantir_db():
     """
     try:
         # 1. Liga SEM especificar base de dados (para poder cria-la)
-        conn = mysql.connector.connect(**DB_CONFIG)
+        conn = mysql.connector.connect(**BASE_DB_CONFIG)
         cursor = conn.cursor()
 
         # 2. Cria a BD se nao existir

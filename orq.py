@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
 import sys, io
-# Força o terminal Windows a usar UTF-8 para aceitar emojis e acentos
 if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
@@ -28,9 +26,9 @@ if sys.stdout.encoding != 'utf-8':
 ==============================================================
 """
 
-import sys
 import time
 import traceback
+import subprocess
 
 # ──────────────────────────────────────────────────────────────
 # HELPERS DE APRESENTAÇÃO
@@ -150,8 +148,8 @@ def recalcular_financeiros():
                     (func_id, salario, custo_he, encargos, custo_total, turnover)
                 )
                 inseridos += 1
-            elif (row[0] or 0) == 0:
-                # Registo existe mas custo_total é 0 — recalcular
+            else:
+                # Registo existe — atualizar para garantir consistência
                 cursor.execute(
                     """UPDATE financeiro_funcionarios
                        SET salario=%s, custo_horas_extra=%s, encargos=%s,
@@ -180,94 +178,121 @@ def recalcular_financeiros():
 
 
 # ──────────────────────────────────────────────────────────────
+# PASSO 1.6 — RECALCULO FINANCEIRO DOS PRODUTOS (STOCK)
+# Garante que todos os produtos com preco_compra e preco_venda > 0
+# têm um registo correcto em `financeiro`, calculado automaticamente.
+# ──────────────────────────────────────────────────────────────
+def recalcular_financeiros_stock():
+    secao("1.6", "RECALCULO FINANCEIRO DOS PRODUTOS (STOCK)")
+    try:
+        from conect import get_connection
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # Lê todos os produtos com preços definidos
+        cursor.execute(
+            "SELECT id, preco_compra, preco_venda, vendas_mensais "
+            "FROM stock WHERE preco_compra > 0 AND preco_venda > 0"
+        )
+        produtos = cursor.fetchall()
+
+        if not produtos:
+            info("[AVISO] Sem produtos com precos definidos - passo ignorado.")
+            conn.close()
+            return True
+
+        inseridos = 0
+        atualizados = 0
+
+        for (prod_id, preco_compra, preco_venda, vendas_mensais) in produtos:
+            vm = int(vendas_mensais or 0)
+
+            # ── Fórmulas financeiras ──────────────────────────────
+            faturamento_mensal = round(preco_venda * vm, 2)
+            custo_mensal       = round(preco_compra * vm, 2)
+            lucro_mensal       = round(faturamento_mensal - custo_mensal, 2)
+            # Margem de lucro em percentagem (0 se sem faturamento)
+            if faturamento_mensal > 0:
+                margem_lucro = round((lucro_mensal / faturamento_mensal) * 100, 4)
+            else:
+                margem_lucro = 0.0
+            # Giro de capital: quantas vezes o custo de stock é recuperado por mês
+            if preco_compra > 0:
+                giro_capital = round(faturamento_mensal / preco_compra, 4)
+            else:
+                giro_capital = 0.0
+            # ─────────────────────────────────────────────────────
+
+            cursor.execute(
+                "SELECT lucro_mensal FROM financeiro WHERE id_produto = %s",
+                (prod_id,)
+            )
+            row = cursor.fetchone()
+
+            if row is None:
+                # Sem registo — criar
+                cursor.execute(
+                    """INSERT INTO financeiro
+                       (id_produto, preco_compra, preco_venda, vendas_mensais,
+                        faturamento_mensal, custo_mensal, lucro_mensal,
+                        margem_lucro, giro_capital)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (prod_id, preco_compra, preco_venda, vm,
+                     faturamento_mensal, custo_mensal, lucro_mensal,
+                     margem_lucro, giro_capital)
+                )
+                inseridos += 1
+            else:
+                # Registo existe — atualizar para garantir consistência
+                cursor.execute(
+                    """UPDATE financeiro
+                       SET preco_compra=%s, preco_venda=%s, vendas_mensais=%s,
+                           faturamento_mensal=%s, custo_mensal=%s, lucro_mensal=%s,
+                           margem_lucro=%s, giro_capital=%s
+                       WHERE id_produto=%s""",
+                    (preco_compra, preco_venda, vm,
+                     faturamento_mensal, custo_mensal, lucro_mensal,
+                     margem_lucro, giro_capital, prod_id)
+                )
+                atualizados += 1
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if inseridos or atualizados:
+            info(f"Criados: {inseridos} | Actualizados: {atualizados} registos financeiros de produtos.")
+        else:
+            info("Todos os registos financeiros de produtos ja estavam correctos.")
+
+        sucesso("Financeiros dos produtos verificados.")
+        return True
+
+    except Exception as e:
+        erro(f"Falhou o recalculo financeiro dos produtos!\n   Detalhe: {e}")
+        traceback.print_exc()
+        return False
+
+
+# ──────────────────────────────────────────────────────────────
 # PASSO 2 — IA: FUNCIONÁRIOS (ml_funcionarios.py)
 # ──────────────────────────────────────────────────────────────
 def correr_ml_funcionarios():
     secao(2, "IA: RISCO DE SAÍDA DOS FUNCIONÁRIOS  (ml_funcionarios.py)")
     try:
-        from conect import get_connection
-        import pandas as pd
-        from sklearn.linear_model import LinearRegression
-        from sklearn.preprocessing import MinMaxScaler
-        from openpyxl import load_workbook
-
-        info("A ler dados dos funcionários da base de dados...")
-        conn = get_connection()
-        query = "SELECT id, assiduidade, produtividade, satisfacao, horas_extra FROM funcionarios WHERE ativo = 1"
-        df = pd.read_sql(query, conn)
-
-        if df.empty:
-            info("[AVISO] Sem funcionarios activos - ML ignorado.")
-            conn.close()
-            return True
-
-        # Substitui NULLs da BD por 0 (evita crash do sklearn com NaN)
-        df = df.fillna(0)
-
-        # Verifica se ha dados uteis (evita ML com tudo a zeros)
-        colunas_ml = ["assiduidade", "produtividade", "satisfacao", "horas_extra"]
-        if df[colunas_ml].sum().sum() == 0:
-            info("[AVISO] Todos os valores de risco sao zero - ML ignorado.")
-            conn.close()
-            return True
-
-        df["risco_real"] = (
-            (100 - df["assiduidade"])   * 0.3 +
-            (100 - df["produtividade"]) * 0.3 +
-            (100 - df["satisfacao"])    * 0.3 +
-            df["horas_extra"].clip(upper=100) * 0.1
+        info("A executar ml_funcionarios.py...")
+        result = subprocess.run(
+            [sys.executable, "ml_funcionarios.py"],
+            capture_output=True, text=True
         )
-
-        X = df[["assiduidade", "produtividade", "satisfacao", "horas_extra"]]
-        y = df["risco_real"]
-
-        scaler = MinMaxScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        model = LinearRegression()
-        model.fit(X_scaled, y)
-        predicoes = model.predict(X_scaled)
-
-        # — Actualizar MySQL —
-        info("A actualizar risco_saida no MySQL...")
-        cursor = conn.cursor()
-        for funcionario_id, risco in zip(df["id"], predicoes):
-            cursor.execute(
-                "UPDATE funcionarios SET risco_saida = %s WHERE id = %s",
-                (float(risco), int(funcionario_id))
-            )
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        # — Actualizar Excel —
-        info("A actualizar risco_saida no Excel...")
-        arquivo_excel = "dados.xlsx"
-        wb = load_workbook(arquivo_excel)
-        ws = wb["funcionarios"]
-
-        col_id, col_risco = None, None
-        for col in range(1, ws.max_column + 1):
-            val = ws.cell(row=1, column=col).value
-            if val == "id":          col_id    = col
-            if val == "risco_saida": col_risco = col
-
-        if col_id and col_risco:
-            dict_prev = {
-                int(id_val): round(float(risco), 4)
-                for id_val, risco in zip(df["id"], predicoes)
-            }
-            for row in range(2, ws.max_row + 1):
-                cell_id = ws.cell(row=row, column=col_id).value
-                if cell_id in dict_prev:
-                    ws.cell(row=row, column=col_risco).value = dict_prev[cell_id]
-        else:
-            info("[AVISO] Coluna 'risco_saida' nao encontrada no Excel - salvo so o SQL.")
-
-        wb.save(arquivo_excel)
-        sucesso("ML Funcionários concluído (MySQL + Excel actualizados).")
+        print(result.stdout)
+        if result.returncode != 0:
+            erro(f"ml_funcionarios.py falhou (código {result.returncode})")
+            if result.stderr:
+                print(result.stderr)
+            return False
+        sucesso("ML Funcionários concluído.")
         return True
-
     except Exception as e:
         erro(f"Falhou o ML de Funcionários!\n   Detalhe: {e}")
         traceback.print_exc()
@@ -280,79 +305,19 @@ def correr_ml_funcionarios():
 def correr_ml_stock():
     secao(3, "IA: PREVISÃO DE RUPTURA DE STOCK  (ml_stock.py)")
     try:
-        from conect import get_connection
-        import pandas as pd
-        from sklearn.linear_model import LinearRegression
-        from sklearn.preprocessing import MinMaxScaler
-        from openpyxl import load_workbook
-
-        info("A ler dados de stock da base de dados...")
-        conn = get_connection()
-        query = "SELECT id, quantidade_atual, vendas_mensais, reposicoes FROM stock"
-        df = pd.read_sql(query, conn)
-
-        if df.empty:
-            info("[AVISO] Sem produtos em stock - ML ignorado.")
-            conn.close()
-            return True
-
-        df = df.fillna(0)
-
-        df["risco_real"] = (
-            (df["vendas_mensais"] / (df["quantidade_atual"] + 1)).clip(upper=1.0) * 0.7 +
-            (1 / (df["reposicoes"] + 1)) * 0.3
-        ) * 100
-
-        X = df[["quantidade_atual", "vendas_mensais", "reposicoes"]]
-        y = df["risco_real"]
-
-        scaler = MinMaxScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        model = LinearRegression()
-        model.fit(X_scaled, y)
-        predicoes = model.predict(X_scaled)
-
-        # — Actualizar MySQL —
-        info("A actualizar previsao_ruptura no MySQL...")
-        cursor = conn.cursor()
-        for produto_id, risco in zip(df["id"], predicoes):
-            cursor.execute(
-                "UPDATE stock SET previsao_ruptura = %s WHERE id = %s",
-                (float(risco), int(produto_id))
-            )
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        # — Actualizar Excel —
-        info("A actualizar previsao_ruptura no Excel...")
-        arquivo_excel = "dados.xlsx"
-        wb = load_workbook(arquivo_excel)
-        ws = wb["stock"]
-
-        col_id, col_risco = None, None
-        for col in range(1, ws.max_column + 1):
-            val = ws.cell(row=1, column=col).value
-            if val == "id":                col_id    = col
-            if val == "previsao_ruptura":  col_risco = col
-
-        if col_id and col_risco:
-            dict_prev = {
-                int(id_val): round(float(risco), 4)
-                for id_val, risco in zip(df["id"], predicoes)
-            }
-            for row in range(2, ws.max_row + 1):
-                cell_id = ws.cell(row=row, column=col_id).value
-                if cell_id in dict_prev:
-                    ws.cell(row=row, column=col_risco).value = dict_prev[cell_id]
-        else:
-            info("[AVISO] Coluna 'previsao_ruptura' nao encontrada no Excel - salvo so o SQL.")
-
-        wb.save(arquivo_excel)
-        sucesso("ML Stock concluído (MySQL + Excel actualizados).")
+        info("A executar ml_stock.py...")
+        result = subprocess.run(
+            [sys.executable, "ml_stock.py"],
+            capture_output=True, text=True
+        )
+        print(result.stdout)
+        if result.returncode != 0:
+            erro(f"ml_stock.py falhou (código {result.returncode})")
+            if result.stderr:
+                print(result.stderr)
+            return False
+        sucesso("ML Stock concluído.")
         return True
-
     except Exception as e:
         erro(f"Falhou o ML de Stock!\n   Detalhe: {e}")
         traceback.print_exc()
@@ -365,9 +330,7 @@ def correr_ml_stock():
 def correr_streamlit():
     secao(4, "INICIAR PORTAL DE ADMINISTRAÇÃO  (streamlit run app.py)")
     try:
-        import subprocess
         info("A iniciar o portal Streamlit...")
-        # Executa o Streamlit de forma síncrona/bloqueante para que o terminal fique ativo com o log
         subprocess.run([sys.executable, "-m", "streamlit", "run", "app.py"])
         return True
     except Exception as e:
@@ -391,9 +354,8 @@ def main():
     correr_ui = "--so-sync" not in args and "--so-ml" not in args and "--so-ml-func" not in args and "--so-ml-stock" not in args and "--sem-portal" not in args
 
     # Flags explícitas têm prioridade
-    if "--so-sync":
-        if "--so-sync" in args:
-            correr_s, correr_mf, correr_ms = True, False, False
+    if "--so-sync" in args:
+        correr_s, correr_mf, correr_ms = True, False, False
     if "--so-ml" in args:
         correr_s, correr_mf, correr_ms = False, True, True
     if "--so-ml-func" in args:
@@ -421,8 +383,11 @@ def main():
         if not resultados["Sincronizacao"]:
             erro("A sincronizacao falhou - a continuar com os dados actuais da BD.")
 
-    # ── Passo 1.5 — sempre corre (depende so da BD, nao do Excel) ──
-    resultados["Financeiros"] = recalcular_financeiros()
+    # ── Passo 1.5 — recalcula financeiros dos funcionarios ──
+    resultados["Financeiros Funcionarios"] = recalcular_financeiros()
+
+    # ── Passo 1.6 — recalcula financeiros dos produtos/stock ──
+    resultados["Financeiros Produtos"] = recalcular_financeiros_stock()
 
 
     # ── Passo 2 ──

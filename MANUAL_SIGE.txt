@@ -1,0 +1,230 @@
+================================================================================
+                MANUAL DE FUNCIONAMENTO DO SIGE - PORTAL
+================================================================================
+
+Este documento explica como o sistema funciona internamente, o que cada campo
+significa, onde e como inserir dados, e como os cálculos são feitos.
+
+================================================================================
+1. ESTRUTURA DO SISTEMA
+================================================================================
+
+O SIGE tem 4 componentes principais que rodam EM SEQUÊNCIA:
+
+   orq.py (Orquestrador)
+     ├── 0. setup_db.py        → Cria/verifica a base de dados MySQL
+     ├── 1. sync.py            → Lê o Excel (dados.xlsx) e sincroniza com MySQL
+     ├── 1.5 recalcular_financeiros()  → Recalcula custos dos funcionários
+     ├── 1.6 recalcular_financeiros_stock() → Recalcula finanças dos produtos
+     ├── 2. ml_funcionarios.py → IA: prevê risco de saída dos funcionários
+     ├── 3. ml_stock.py        → IA: prevê risco de rutura de stock
+     └── 4. portal (app.py)    → Interface web (Streamlit)
+
+-------------------------------------------------------------------------------
+IMPORTANTE - SENTIDO DOS DADOS:
+-------------------------------------------------------------------------------
+  Excel (dados.xlsx)  ─── sync.py (leitura) ───> MySQL (sige_db)
+                                                      │
+                                        ml_funcionarios.py ──> atualiza risco_saida
+                                        ml_stock.py       ──> atualiza previsao_ruptura
+                                                      │
+                                               Portal (app.py) lê e escreve no MySQL
+
+  Ou seja: o Excel é a FONTE inicial (sincronização apenas de leitura).
+  Os scripts ML (ml_funcionarios.py e ml_stock.py) atualizam apenas o MySQL.
+  O Portal lê e escreve DIRETAMENTE no MySQL.
+
+================================================================================
+2. SECÇÃO STOCK - "REPOSIÇÕES" vs "QUANTIDADE ATUAL"
+================================================================================
+
+COMO CADA CAMPO FUNCIONA:
+
+  Quantidade em Armazém  →  quantidade_atual  (unidades físicas em stock)
+  Reposições (unid.)      →  reposicoes       (parâmetro: qtd que repõe por vez)
+  Vendas Mensais          →  vendas_mensais   (unidades vendidas por mês)
+
+RESPOSTA À SUA DÚVIDA:
+
+  O campo "Reposições" NÃO adiciona à quantidade atual.
+  Atualmente é um campo apenas INFORMATIVO — já não é usado no cálculo de risco
+  da IA (o risco baseia-se na margem de dias vs. tempo de reposição).
+
+  Se criou um produto com 0 unidades e quer colocar 500 em stock:
+    → Deve alterar "Quantidade em Armazém" para 500
+
+  O campo "Reposições" serve apenas como referência:
+    "Quando faz um pedido de reposição, quantas unidades costuma pedir?"
+
+  A fórmula de risco da IA (ml_stock.py) é baseada na MARGEM DE DIAS:
+
+    vendas_diarias    = vendas_mensais / 30
+    dias_stock        = quantidade_atual / vendas_diarias  (ou 999 se sem vendas)
+    margem_dias       = dias_stock - tempo_reposicao
+
+    risco:
+
+      Se margem <= 0                       → 100%  (rutura iminente)
+      Se margem <= tempo_reposicao         → 75%–100%
+      Se margem <= 2 × tempo_reposicao     → 40%–75%
+      Se margem > 2 × tempo_reposicao      → 0%–40%
+
+  Quanto menor a margem em relação ao prazo de reposição, maior o risco.
+  O campo "Reposições" (reposicoes) já NÃO é usado no cálculo de risco,
+  servindo apenas como referência para o utilizador.
+
+-------------------------------------------------------------------------------
+COMO DEVE INSERIR:
+-------------------------------------------------------------------------------
+  Se comprou 500 unidades novas de caneta:
+    → Editar "Quantidade em Armazém":  muda de 0 para 500
+    → "Reposições": campo informativo, não afeta o risco
+    → Guardar
+
+  "Dias até Rutura" aparece a 145?
+  
+  A fórmula no portal (app.py):
+  
+    vendas_diarias = vendas_mensais / 30
+    dias_ate_ruptura = (quantidade_atual / vendas_diarias) - tempo_reposicao
+  
+  No seu caso: qtd=500, vendas=100, tempo_reposicao=5
+    vendas_diarias = 100/30 = 3.33
+    dias = (500/3.33) - 5 = 150 - 5 = 145 ✅
+  
+  Está correto! 500 unidades vendendo 100 por mês duram ~5 meses.
+  145 dias = 4 meses e 25 dias.
+
+  Com margem de 145 dias e tempo_reposicao=5, a margem >> 2×lead,
+  pelo que o risco será 0%–40% (geralmente próximo de 0 com stock elevado).
+
+================================================================================
+3. SECÇÃO FUNCIONÁRIOS - ASSIDUIDADE E FALTAS
+================================================================================
+
+CÁLCULO DA ASSIDUIDADE:
+
+  assiduidade(%) = (dias_uteis - faltas) / dias_uteis × 100
+
+  No formulário de EDIÇÃO, o sistema usa um valor fixo de 22 DIAS ÚTEIS.
+  
+  Se a funcionária tem assiduidade=28%:
+    → faltas implícitas = (1 - 28/100) × 22 = 0.72 × 22 ≈ 16 faltas
+
+  É NORMAL o portal mostrar 16 faltas quando abre a edição - isso corresponde
+  aos 28% de assiduidade atuais.
+
+  Se mudar faltas para 0 e guardar:
+    → nova assiduidade = (22 - 0)/22 × 100 = 100%
+    → O risco de saída vai baixar (porque assiduidade alta reduz risco)
+
+  Porque aparece risco 25 depois de alterar?
+  
+  A IA calcula (ml_funcionarios.py):
+  
+    risco = (100 - assiduidade) × 0.3
+          + (100 - produtividade) × 0.3
+          + (100 - satisfacao) × 0.3
+          + horas_extra × 0.1
+
+  Se a funcionária tem: assiduidade=100%, produtividade=90%, satisfacao=20%
+    risco = 0×0.3 + 10×0.3 + 80×0.3 + 0×0.1 = 0 + 3 + 24 + 0 = 27%
+
+  O resultado final depende se os dados têm variação suficiente:
+    - Se todos os funcionários têm métricas iguais → usa o valor direto (sem ML)
+    - Se há variação → a regressão linear (MinMaxScaler + LinearRegression)
+      suaviza ligeiramente os valores, podendo aproximá-los para 25%.
+
+  O valor 25 que aparece está portanto correto.
+
+================================================================================
+4. PORQUE É QUE O EXCEL APAGA OS CÁLCULOS?
+================================================================================
+
+   Nenhum script do pipeline escreve no Excel. O sync.py faz apenas LEITURA
+   (read_only) para sincronizar os dados para o MySQL. Os scripts de IA
+   (ml_funcionarios.py, ml_stock.py) atualizam exclusivamente a base de dados.
+
+   O Excel contém apenas as colunas de preenchimento do gestor. Todas as
+   colunas calculadas (risco_saida, previsao_ruptura, etc.) existem apenas
+   no MySQL e são visualizadas através do portal (app.py).
+
+   Como o Excel nunca é alterado pelo pipeline, as fórmulas e estrutura
+   do ficheiro são sempre preservadas.
+
+================================================================================
+5. O QUE CADA BOTÃO FAZ NO PORTAL
+================================================================================
+
+  "🧠 Rodar Inteligência Artificial (Prever Rupturas)"
+    → Executa ml_stock.py
+    → Calcula previsão de rutura baseada em: quantidade, vendas, tempo de reposição
+    → Atualiza MySQL
+
+  "🧠 Rodar Inteligência Artificial (Recalcular Riscos)"
+    → Executa ml_funcionarios.py
+    → Calcula risco de saída baseado em: assiduidade, produtividade, satisfação, horas extra
+    → Atualiza MySQL
+
+  "💾 Executar Desligamentos Selecionados" / "💾 Executar Remoções de Catálogo"
+    → Marca como "ativo=0" (não apaga, apenas oculta)
+
+================================================================================
+6. FLUXO DE TRABALHO RECOMENDADO
+================================================================================
+
+  A. Para adicionar stock novo:
+     Portal → Aba Stock → "✏️ Atualizar Ficha do Produto"
+     → Selecionar produto → Alterar "Qtd Atual" → Guardar
+
+  B. Para registar faltas/avaliações:
+     Portal → Aba Funcionários → "✏️ Ficha de Edição Completa"
+     → Selecionar funcionário → Alterar Faltas / Metas / Notas → Guardar
+     → (depois) Carregar no botão da IA para recalcular riscos
+
+  C. Para sincronizar Excel → MySQL:
+     Terminal: python orq.py --so-sync
+
+  D. Para correr apenas a IA:
+     Terminal: python orq.py --so-ml
+
+  E. Para correr tudo + portal:
+     Terminal: python orq.py
+
+================================================================================
+7. RESUMO DOS CÁLCULOS MATEMÁTICOS
+================================================================================
+
+  FUNCIONÁRIOS:
+    assiduidade         = (dias_uteis - faltas) / dias_uteis × 100
+    produtividade       = metas_concluidas / metas_atribuidas × 100
+    satisfacao          = nota / 5 × 100
+    avaliacao_desempenho = avaliacao_gestor / 5 × 100
+
+    risco_saida (ML)    = (100-assid)×0.3 + (100-prod)×0.3 + (100-sat)×0.3 + h_extra×0.1
+
+  STOCK:
+    vendas_diarias      = vendas_mensais / 30
+    dias_stock          = quantidade / vendas_diarias  (ou 999 se sem vendas)
+    margem_dias         = dias_stock - tempo_reposicao
+    risco_ruptura (ML):
+      0 se margem ≤ 0                     → 100%
+      margem ≤ tempo_reposicao            → 75%–100%
+      margem ≤ 2 × tempo_reposicao        → 40%–75%
+      margem > 2 × tempo_reposicao        → 0%–40%
+
+  FINANCEIRO:
+    encargos            = salario × 0.2375
+    custo_hora_extra    = (salario/160) × horas × 1.5
+    custo_total_mensal  = salario + encargos + custo_he
+    turnover_previsto   = salario × 2 (custo estimado de substituição)
+
+================================================================================
+8. ESTADOS DE RISCO
+================================================================================
+
+    🔴 Em Risco    ≥ 75%    → Crítico, precisa de ação urgente
+    🟡 Avaliar     ≥ 40%    → Requer atenção e monitorização
+    🟢 Seguro       < 40%    → Dentro do aceitável
+
+================================================================================

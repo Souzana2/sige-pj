@@ -2,7 +2,7 @@ import pandas as pd
 from openpyxl import load_workbook
 from conect import get_connection
 
-print("Iniciando a Sincronizacao Inteligente...")
+print("Iniciando a Sincronização")
 
 # ==========================================
 # FOLHAS DO EXCEL QUE PERTENCEM AO PIPELINE
@@ -52,10 +52,9 @@ def tratar_percentagem(valor):
 def sincronizar_funcionarios(cursor, df):
     print("-> A processar Funcionarios...")
     df = df.dropna(subset=['nome'])
-    id_writes = {}   # linhas novas que precisam de ID escrito no Excel
 
     for index, row in df.iterrows():
-        linha_excel = index + 2
+        nome = str(row.get("nome")).strip()
         salario     = tratar_dinheiro(row.get("salario"))
         horas_extra = tratar_dinheiro(row.get("horas_extra", row.get("hora_extra")))
 
@@ -63,43 +62,29 @@ def sincronizar_funcionarios(cursor, df):
         produtividade        = tratar_percentagem(row.get("produtividade"))
         satisfacao           = tratar_percentagem(row.get("satisfacao"))
         avaliacao_desempenho = tratar_percentagem(row.get("avaliacao_desempenho"))
+        ativo                = tratar_nulo(row.get("ativo"), 1)
 
-        tem_id = not (pd.isna(row.get("id")) or row.get("id") == "")
+        # Busca pelo nome no banco de dados para evitar duplicar
+        cursor.execute("SELECT id FROM funcionarios WHERE nome = %s", (nome,))
+        match = cursor.fetchone()
 
-        if tem_id:
-            id_val = int(row["id"])
+        if match:
+            id_val = match[0]
             cursor.execute(
                 """UPDATE funcionarios
-                   SET nome=%s, data_nascimento=%s, departamento=%s, cargo=%s,
+                   SET data_nascimento=%s, departamento=%s, cargo=%s,
                        data_admissao=%s, salario=%s, horas_extra=%s,
                        assiduidade=%s, produtividade=%s, satisfacao=%s,
                        avaliacao_desempenho=%s, ativo=%s
                    WHERE id=%s""",
                 (
-                    tratar_nulo(row.get("nome")), tratar_data(row.get("data_nascimento")),
+                    tratar_data(row.get("data_nascimento")),
                     tratar_nulo(row.get("departamento")), tratar_nulo(row.get("cargo")),
                     tratar_data(row.get("data_admissao")), salario, horas_extra,
                     assiduidade, produtividade, satisfacao, avaliacao_desempenho,
-                    tratar_nulo(row.get("ativo"), 1), id_val
+                    ativo, id_val
                 )
             )
-            if cursor.rowcount == 0:
-                cursor.execute(
-                    """INSERT IGNORE INTO funcionarios
-                       (id, nome, data_nascimento, departamento, cargo,
-                        data_admissao, salario, horas_extra,
-                        assiduidade, produtividade, satisfacao,
-                        avaliacao_desempenho, ativo)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (
-                        id_val,
-                        tratar_nulo(row.get("nome")), tratar_data(row.get("data_nascimento")),
-                        tratar_nulo(row.get("departamento")), tratar_nulo(row.get("cargo")),
-                        tratar_data(row.get("data_admissao")), salario, horas_extra,
-                        assiduidade, produtividade, satisfacao, avaliacao_desempenho,
-                        tratar_nulo(row.get("ativo"), 1)
-                    )
-                )
         else:
             cursor.execute(
                 """INSERT INTO funcionarios
@@ -108,24 +93,29 @@ def sincronizar_funcionarios(cursor, df):
                     avaliacao_desempenho, ativo)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (
-                    tratar_nulo(row.get("nome")), tratar_data(row.get("data_nascimento")),
+                    nome, tratar_data(row.get("data_nascimento")),
                     tratar_nulo(row.get("departamento")), tratar_nulo(row.get("cargo")),
                     tratar_data(row.get("data_admissao")), salario, horas_extra,
                     assiduidade, produtividade, satisfacao, avaliacao_desempenho,
-                    tratar_nulo(row.get("ativo"), 1)
+                    ativo
                 )
             )
-            id_writes[linha_excel] = cursor.lastrowid  # ID gerado pelo MySQL
-
-    return id_writes
-
 
 def sincronizar_financeiro_funcionarios(cursor, df):
     print("-> A processar Financeiro dos Funcionarios...")
     df = df.dropna(subset=['id_funcionario'])
+    ignorados = 0
 
     for _, row in df.iterrows():
         id_val = int(row["id_funcionario"])
+
+        # Verifica se o funcionario pai existe (evita FK violation com IDs antigos no Excel)
+        cursor.execute("SELECT COUNT(*) FROM funcionarios WHERE id=%s", (id_val,))
+        if cursor.fetchone()[0] == 0:
+            print(f"   [AVISO] id_funcionario={id_val} nao existe em 'funcionarios' - linha ignorada.")
+            ignorados += 1
+            continue
+
         sal = tratar_dinheiro(row.get("salario"))
         che = tratar_dinheiro(row.get("custo_horas_extra"))
         enc = tratar_dinheiro(row.get("encargos"))
@@ -152,6 +142,9 @@ def sincronizar_financeiro_funcionarios(cursor, df):
                 (sal, che, enc, tot, ctp, id_val)
             )
 
+    if ignorados:
+        print(f"   [AVISO] {ignorados} linha(s) de financeiro_funcionarios ignoradas (IDs sem correspondencia).")
+
 
 # ==========================================
 # SINCRONIZAÇÃO: STOCK
@@ -160,68 +153,62 @@ def sincronizar_financeiro_funcionarios(cursor, df):
 def sincronizar_stock(cursor, df):
     print("-> A processar Stock...")
     df = df.dropna(subset=['produto'])
-    id_writes = {}
 
     for index, row in df.iterrows():
-        linha_excel = index + 2
-        tem_id = not (pd.isna(row.get("id")) or row.get("id") == "")
+        produto = str(row.get("produto")).strip()
+        categoria = tratar_nulo(row.get("categoria"))
+        preco_compra = tratar_dinheiro(row.get("preco_compra"))
+        preco_venda  = tratar_dinheiro(row.get("preco_venda"))
+        tempo_reposicao = tratar_nulo(row.get("tempo_reposicao"), 0)
+        ativo = tratar_nulo(row.get("ativo"), 1)
 
-        if tem_id:
-            id_val = int(row["id"])
+        # Busca pelo nome do produto no MySQL para evitar duplicados
+        cursor.execute("SELECT id FROM stock WHERE produto = %s", (produto,))
+        match = cursor.fetchone()
+
+        if match:
+            id_val = match[0]
+            # UPDATE: não modificamos quantidade_atual, vendas_mensais, reposicoes ou stock_minimo
+            # pois estes valores são dinâmicos e mantidos no banco de dados.
             cursor.execute(
                 """UPDATE stock
-                   SET produto=%s, categoria=%s, quantidade_atual=%s, vendas_mensais=%s,
-                       reposicoes=%s, preco_compra=%s, preco_venda=%s,
-                       stock_minimo=%s, tempo_reposicao=%s
+                   SET categoria=%s, preco_compra=%s, preco_venda=%s,
+                       tempo_reposicao=%s, ativo=%s
                    WHERE id=%s""",
                 (
-                    tratar_nulo(row.get("produto")), tratar_nulo(row.get("categoria")),
-                    tratar_nulo(row.get("quantidade_atual"), 0), tratar_nulo(row.get("vendas_mensais"), 0),
-                    tratar_nulo(row.get("reposicoes"), 0), tratar_dinheiro(row.get("preco_compra")),
-                    tratar_dinheiro(row.get("preco_venda")), tratar_nulo(row.get("stock_minimo"), 0),
-                    tratar_nulo(row.get("tempo_reposicao"), 0), id_val
+                    categoria, preco_compra, preco_venda,
+                    tempo_reposicao, ativo, id_val
                 )
             )
-            if cursor.rowcount == 0:
-                cursor.execute(
-                    """INSERT IGNORE INTO stock
-                       (id, produto, categoria, quantidade_atual, vendas_mensais,
-                        reposicoes, preco_compra, preco_venda,
-                        stock_minimo, tempo_reposicao, previsao_ruptura)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (
-                        id_val,
-                        tratar_nulo(row.get("produto")), tratar_nulo(row.get("categoria")),
-                        tratar_nulo(row.get("quantidade_atual"), 0), tratar_nulo(row.get("vendas_mensais"), 0),
-                        tratar_nulo(row.get("reposicoes"), 0), tratar_dinheiro(row.get("preco_compra")),
-                        tratar_dinheiro(row.get("preco_venda")), tratar_nulo(row.get("stock_minimo"), 0),
-                        tratar_nulo(row.get("tempo_reposicao"), 0), tratar_nulo(row.get("previsao_ruptura"))
-                    )
-                )
         else:
+            # INSERT: criamos com quantidades e vendas a 0, pronto para movimentações
             cursor.execute(
                 """INSERT INTO stock
                    (produto, categoria, quantidade_atual, vendas_mensais,
                     reposicoes, preco_compra, preco_venda,
-                    stock_minimo, tempo_reposicao, previsao_ruptura)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    stock_minimo, tempo_reposicao, ativo)
+                   VALUES (%s, %s, 0, 0, 0, %s, %s, 0, %s, %s)""",
                 (
-                    tratar_nulo(row.get("produto")), tratar_nulo(row.get("categoria")),
-                    tratar_nulo(row.get("quantidade_atual"), 0), tratar_nulo(row.get("vendas_mensais"), 0),
-                    tratar_nulo(row.get("reposicoes"), 0), tratar_dinheiro(row.get("preco_compra")),
-                    tratar_dinheiro(row.get("preco_venda")), tratar_nulo(row.get("stock_minimo"), 0),
-                    tratar_nulo(row.get("tempo_reposicao"), 0), tratar_nulo(row.get("previsao_ruptura"))
+                    produto, categoria, preco_compra, preco_venda,
+                    tempo_reposicao, ativo
                 )
             )
-            id_writes[linha_excel] = cursor.lastrowid
-
 
 def sincronizar_financeiro_stock(cursor, df):
     print("-> A processar Financeiro do Stock...")
     df = df.dropna(subset=['id_produto'])
+    ignorados = 0
 
     for _, row in df.iterrows():
         id_val = int(row["id_produto"])
+
+        # Verifica se o produto pai existe (evita FK violation com IDs antigos no Excel)
+        cursor.execute("SELECT COUNT(*) FROM stock WHERE id=%s", (id_val,))
+        if cursor.fetchone()[0] == 0:
+            print(f"   [AVISO] id_produto={id_val} nao existe em 'stock' - linha ignorada.")
+            ignorados += 1
+            continue
+
         pc = tratar_dinheiro(row.get("preco_compra"))
         pv = tratar_dinheiro(row.get("preco_venda"))
         vm = tratar_nulo(row.get("vendas_mensais"), 0)
@@ -242,6 +229,9 @@ def sincronizar_financeiro_stock(cursor, df):
             (id_val, pc, pv, vm, fm, cm, lm, ml, gc,
                      pc, pv, vm, fm, cm, lm, ml, gc)
         )
+
+    if ignorados:
+        print(f"   [AVISO] {ignorados} linha(s) de financeiro ignoradas (IDs sem correspondencia).")
 
 
 # ==========================================
@@ -275,35 +265,23 @@ def main():
             headers = [str(h) if h is not None else f"col_{i}" for i, h in enumerate(rows[0])]
             return pd.DataFrame(rows[1:], columns=headers)
 
-        df_func      = _ws_para_df(wb_ro["funcionarios"])
-        df_fin_func  = _ws_para_df(wb_ro["financeiro_funcionarios"])
-        df_stock     = _ws_para_df(wb_ro["stock"])
-        df_fin_stock = _ws_para_df(wb_ro["financeiro"])
+        df_func      = _ws_para_df(wb_ro["funcionarios"]) if "funcionarios" in folhas_disponiveis else pd.DataFrame()
+        df_fin_func  = _ws_para_df(wb_ro["financeiro_funcionarios"]) if "financeiro_funcionarios" in folhas_disponiveis else pd.DataFrame()
+        df_stock     = _ws_para_df(wb_ro["stock"]) if "stock" in folhas_disponiveis else pd.DataFrame()
+        df_fin_stock = _ws_para_df(wb_ro["financeiro"]) if "financeiro" in folhas_disponiveis else pd.DataFrame()
         wb_ro.close()
 
         # ── Sincronizações SQL ──
-        id_w_func  = sincronizar_funcionarios(cursor, df_func)
-        id_w_stock = sincronizar_stock(cursor, df_stock)
-        sincronizar_financeiro_funcionarios(cursor, df_fin_func)
-        sincronizar_financeiro_stock(cursor, df_fin_stock)
+        if not df_func.empty:
+            sincronizar_funcionarios(cursor, df_func)
+        if not df_stock.empty:
+            sincronizar_stock(cursor, df_stock)
+        if not df_fin_func.empty:
+            sincronizar_financeiro_funcionarios(cursor, df_fin_func)
+        if not df_fin_stock.empty:
+            sincronizar_financeiro_stock(cursor, df_fin_stock)
 
         conn.commit()
-
-        # ── Só abre o Excel para escrita se houver IDs novos para gravar ──
-        # (esta é a maior optimização: load_workbook é lento)
-        if id_w_func or id_w_stock:
-            total_novos = len(id_w_func) + len(id_w_stock)
-            print(f"   A escrever {total_novos} novo(s) ID(s) no Excel...")
-            wb = load_workbook(arquivo_excel, data_only=True)
-            for linha, id_val in id_w_func.items():
-                wb['funcionarios'].cell(row=linha, column=1).value = id_val
-            for linha, id_val in id_w_stock.items():
-                wb['stock'].cell(row=linha, column=1).value = id_val
-            wb.save(arquivo_excel)
-            wb.close()
-            print(f"   {total_novos} ID(s) escritos com sucesso.")
-        else:
-            print("   Sem novas linhas — Excel nao foi modificado (operacao rapida).")
 
         print("SINCRONIZACAO CONCLUIDA COM SUCESSO!")
 

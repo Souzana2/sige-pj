@@ -1,4 +1,7 @@
 import sys
+import warnings
+warnings.filterwarnings("ignore")
+
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -6,63 +9,54 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 from conect import get_connection
 import pandas as pd
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import MinMaxScaler
-from openpyxl import load_workbook
+
 
 print("A iniciar IA: Previsão de Ruptura de Stock...")
 
-# 1 ao 6. (Igual ao seu original)
+# 1. Ler dados incluindo tempo_reposicao
 conn = get_connection()
-query = "SELECT id, quantidade_atual, vendas_mensais, reposicoes FROM stock"
+query = "SELECT id, produto, quantidade_atual, vendas_mensais, tempo_reposicao FROM stock WHERE ativo = 1"
 df = pd.read_sql(query, conn)
 
-# Transforma todos os espaços vazios (NaN) em 0 para a IA não crashar
+# Preencher NaN com 0
 df = df.fillna(0)
 
-# Cálculo absoluto de risco (escala 0-100)
-df["risco_real"] = (
-    (df["vendas_mensais"] / (df["quantidade_atual"] + 1)).clip(upper=1.0) * 0.7 +
-    (1 / (df["reposicoes"] + 1)) * 0.3
-) * 100
+# 2. Calcular dias de stock disponível
+#    dias_stock = quanto tempo o stock atual dura com o ritmo de vendas atual
+df["vendas_diarias"] = df["vendas_mensais"] / 30.0
+df["dias_stock"] = df.apply(
+    lambda r: r["quantidade_atual"] / r["vendas_diarias"] if r["vendas_diarias"] > 0 else 999.0,
+    axis=1
+)
 
-X = df[["quantidade_atual", "vendas_mensais", "reposicoes"]]
-y = df["risco_real"]
+# 3. Margem = dias_stock - tempo_reposicao
+#    Positivo: ainda há margem antes de precisar repor
+#    Zero ou negativo: já está em ruptura ou iminente
+df["margem_dias"] = df["dias_stock"] - df["tempo_reposicao"]
 
-scaler = MinMaxScaler()
-X_scaled = scaler.fit_transform(X)
+# 4. Cálculo do risco (0=seguro, 100=ruptura certa)
+#    Baseia-se em quantas vezes o lead time cabe na margem disponível
+def calc_risco(row):
+    margem = row["margem_dias"]
+    lead   = max(float(row["tempo_reposicao"]), 1.0)
+    if margem <= 0:
+        return 100.0                                              # Em ruptura
+    elif margem <= lead:
+        return round(75.0 + (1.0 - margem / lead) * 25.0, 2)    # 75-100: alto
+    elif margem <= 2 * lead:
+        return round(40.0 + (1.0 - (margem - lead) / lead) * 35.0, 2)  # 40-75: médio
+    else:
+        return round(max(0.0, 40.0 - (margem - 2 * lead) / lead * 20.0), 2)  # 0-40: baixo
 
-model = LinearRegression()
-model.fit(X_scaled, y)
-predicoes = model.predict(X_scaled)
+df["risco_real"] = df.apply(calc_risco, axis=1).clip(0, 100)
+predicoes = df["risco_real"].values
 
-# 7. Atualizar MySQL
+# 5. Atualizar MySQL
 cursor = conn.cursor()
 for produto_id, risco in zip(df["id"], predicoes):
     query = "UPDATE stock SET previsao_ruptura = %s WHERE id = %s"
-    # risco já está na escala 0-100, salva diretamente
     cursor.execute(query, (float(risco), int(produto_id)))
 conn.commit()
 cursor.close()
 conn.close()
 print("✅ SQL atualizado.")
-
-# 8. A NOVIDADE: Atualizar o Excel!
-arquivo_excel = "dados.xlsx"
-wb = load_workbook(arquivo_excel)
-ws = wb['stock']
-
-col_id, col_risco = None, None
-for col in range(1, ws.max_column + 1):
-    if ws.cell(row=1, column=col).value == "id": col_id = col
-    if ws.cell(row=1, column=col).value == "previsao_ruptura": col_risco = col
-
-if col_id and col_risco:
-    dict_previsoes = {int(id_val): round(float(risco), 4) for id_val, risco in zip(df["id"], predicoes)}
-    for row in range(2, ws.max_row + 1):
-        cell_id = ws.cell(row=row, column=col_id).value
-        if cell_id in dict_previsoes:
-            ws.cell(row=row, column=col_risco).value = dict_previsoes[cell_id]
-
-wb.save(arquivo_excel)
-print("✅ Excel atualizado com as previsões de Ruptura!")

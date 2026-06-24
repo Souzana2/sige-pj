@@ -1,47 +1,62 @@
 # SIGE — Sistema Integrado de Gestão Empresarial
 
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.x-red?logo=streamlit&logoColor=white)
+![MySQL](https://img.shields.io/badge/MySQL-8.x-orange?logo=mysql&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-ML-green?logo=scikit-learn&logoColor=white)
+![License](https://img.shields.io/badge/Licença-MIT-lightgrey)
+
 > Projeto Final de Curso · Ciência de Dados
 
-**SIGE** é uma plataforma local de administração empresarial que integra gestão de recursos humanos, controlo de inventário, análise financeira e modelos de Inteligência Artificial preditiva, tudo num painel interativo desenvolvido em Python.
+**SIGE** é uma plataforma local de administração empresarial que integra gestão de recursos humanos, controlo de inventário, análise financeira e modelos de Inteligência Artificial preditiva, desenvolvida inteiramente em Python com interface web interativa em Streamlit.
 
-O sistema combina um pipeline automatizado de dados (Excel → MySQL → ML → Portal) com uma interface web construída em Streamlit.
-
-> **Nota sobre sincronização:** o ficheiro `dados.xlsx` é a **fonte de entrada única** — o pipeline flui apenas no sentido **Excel → MySQL**. O ficheiro está organizado exclusivamente com os campos de preenchimento do gestor (sem colunas calculadas). O Excel com fórmulas avançadas é mantido em separado (`dados.xlsm`) como documento de análise e protótipo da fase 1 do projeto.
+O sistema opera sobre um pipeline automatizado de dados no sentido **Excel → MySQL → ML → Portal**, garantindo que o gestor trabalha sempre sobre dados consistentes e atualizados.
 
 ---
 
-## Funcionalidades Principais
+## Índice
 
-### 1. Gestão de Recursos Humanos (RH)
-- **Registo completo de colaboradores** — nome, cargo, departamento, salário, datas e histórico.
-- **Avaliações de desempenho** — assiduidade, produtividade, satisfação e avaliação do gestor (escala 0–100 %).
-- **Pagamentos e lançamentos** — registo de salários, bónus e adiantamentos com histórico mensal.
-- **Desligamento** — processo seguro de inativação de colaboradores sem apagar dados históricos.
+- [Funcionalidades](#funcionalidades)
+- [Arquitetura](#arquitetura)
+- [Pré-requisitos](#pré-requisitos)
+- [Instalação e Configuração](#instalação-e-configuração)
+- [Como Executar](#como-executar)
+- [Estrutura do Projeto](#estrutura-do-projeto)
+- [Tecnologias](#tecnologias)
+- [Nota sobre o Ficheiro de Dados](#nota-sobre-o-ficheiro-de-dados)
+- [Licença](#licença)
 
-### 2. Controlo de Stock e Armazém
-- **Inventário completo** — cadastro de produtos por categoria, preço de compra/venda e lead time de reposição.
-- **Movimentações em tempo real** — registo de entradas (compras) e saídas (vendas) com atualização automática de saldos, vendas mensais e stock mínimo.
-- **Alertas de ruptura** — cálculo automático de "Dias até Ruptura" por produto, com semáforo de risco (🔴/🟡/🟢) baseado no lead time individual de cada produto.
+---
 
-### 3. Dashboard Financeiro Executivo
+## Funcionalidades
 
-O dashboard apresenta **duas perspetivas financeiras independentes**, cada uma com os seus próprios KPIs de Faturação, Custos Operacionais, Resultado Líquido e Receita por Colaborador — todos formatados no padrão português (`1.234.567,89 €`).
+### Gestão de Recursos Humanos
 
-#### Visão Real (mês em curso)
-Reflete o dinheiro **efetivamente movimentado** no mês atual:
+- Registo completo de colaboradores: nome, cargo, departamento, salário, datas e histórico
+- Avaliações de desempenho: assiduidade, produtividade, satisfação e nota do gestor (escala 0–100 %)
+- Pagamentos e lançamentos: salários, bónus e adiantamentos com histórico mensal
+- Processo de desligamento seguro: inativação de colaboradores sem perda de dados históricos
+
+### Controlo de Stock e Armazém
+
+- Inventário completo com cadastro de produtos por categoria, preço de compra/venda e lead time de reposição
+- Movimentações em tempo real: entradas (compras) e saídas (vendas) com atualização automática de saldos
+- Alertas de ruptura: cálculo de "Dias até Ruptura" por produto com classificação de risco (crítico / atenção / confortável) baseada no lead time individual
+
+### Dashboard Financeiro Executivo
+
+O dashboard apresenta duas perspetivas financeiras independentes, cada uma com os seus próprios KPIs (Faturação, Custos Operacionais, Resultado Líquido e Receita por Colaborador), formatados no padrão português (`1.234.567,89 €`).
+
+**Visão Real (mês em curso)** — reflete o dinheiro efetivamente movimentado:
 
 | Componente | Cálculo |
 |---|---|
 | Faturação Real | Soma das saídas de stock × preço de venda registadas no mês |
-| Custo de Pessoal | `salário + encargos (23,75%) + horas extra (× 1,5)` por colaborador |
+| Custo de Pessoal | `salário + encargos (23,75 %) + horas extra (× 1,5)` por colaborador |
 | Custo de Mercadoria | Soma das entradas de stock × preço de compra registadas no mês |
 | Resultado Líquido | `Faturação − Custo Pessoal − Custo Mercadoria` |
 
-> ⚠️ **Por que o Resultado Real pode aparecer negativo?**  
-> Num mês em que a empresa faz grandes compras de stock (reposição de armazém), o custo de mercadoria registado é elevado, mas as vendas correspondentes só se materializam nos meses seguintes. É um fenómeno contabilístico normal em gestão de inventário: o dinheiro foi investido em stock, não perdido. O sistema inclui um aviso explicativo diretamente no painel.
-
-#### Visão Estimada (projeção mensal estável)
-Reflete o **potencial de receita** esperado com base no ritmo regular de vendas cadastrado:
+**Visão Estimada (projeção mensal estável)** — reflete o potencial de receita com base no ritmo regular de vendas:
 
 | Componente | Cálculo |
 |---|---|
@@ -50,18 +65,18 @@ Reflete o **potencial de receita** esperado com base no ritmo regular de vendas 
 | Custo de Mercadoria | `vendas_mensais × preço_compra` por produto |
 | Resultado Líquido | `Faturação − Custo Pessoal − Custo Mercadoria` |
 
-> 💡 **Como interpretar as duas visões em conjunto?**  
-> Se a Visão Real mostra prejuízo mas a Visão Estimada mostra lucro, a empresa está saudável: apenas realizou compras de stock acima do normal neste mês. O gestor deve comparar as duas para distinguir entre **problema real de margem** (ambas negativas) e **investimento pontual em inventário** (só a Real negativa).
+> **Nota:** Um Resultado Real negativo com Visão Estimada positiva indica investimento pontual em stock, não prejuízo operacional. O sistema inclui um aviso explicativo diretamente no painel.
 
-**Outros indicadores do dashboard:**
-- **Giro de Capital** — valor total empatado em armazém (`quantidade × preço_compra`) e Top 3 produtos mais rentáveis por margem.
-- **Risco de Turnover** — custo latente total previsto (`salário × 2` por colaborador em risco), representando o custo estimado de substituição se esses colaboradores saírem.
+**Indicadores adicionais:**
 
-### 4. Inteligência Artificial (Machine Learning)
+- **Giro de Capital** — valor total empatado em armazém e Top 3 produtos mais rentáveis por margem
+- **Risco de Turnover** — custo latente estimado de substituição para colaboradores em risco (`salário × 2` por colaborador)
 
-#### Modelo 1 — Risco de Saída de Funcionários (`ml_funcionarios.py`)
+### Inteligência Artificial
 
-Calcula um **índice de risco contínuo** (0–100) para cada colaborador ativo. A variável‑alvo é determinada pela seguinte fórmula de negócio:
+**Modelo 1 — Risco de Saída de Colaboradores** (`ml_funcionarios.py`)
+
+Calcula um índice de risco contínuo (0–100) por colaborador ativo com base na seguinte fórmula de negócio:
 
 ```
 risco_real = (100 − assiduidade)   × 0.30
@@ -70,8 +85,6 @@ risco_real = (100 − assiduidade)   × 0.30
            + horas_extra           × 0.10
 ```
 
-Onde cada métrica é calculada da seguinte forma:
-
 | Métrica | Fórmula |
 |---|---|
 | Assiduidade (%) | `(dias_úteis − faltas) / dias_úteis × 100` |
@@ -79,86 +92,79 @@ Onde cada métrica é calculada da seguinte forma:
 | Satisfação (%) | `nota_satisfação / 5 × 100` |
 | Horas Extra | Valor absoluto mensal declarado |
 
-Antes de aplicar a regressão, o script verifica se os dados têm variação suficiente:
-- Se todas as métricas forem iguais entre colaboradores, usa o **valor direto** (sem ML, evitando divisão por zero no escalonamento).
-- Se há variação, a **Regressão Linear** (scikit-learn) com `MinMaxScaler` aprende a mapear as 4 features normalizadas para o índice de risco, suavizando o resultado.
-
-O valor final é gravado no campo `risco_saida` na base de dados.
-
-#### Modelo 2 — Previsão de Ruptura de Stock (`ml_stock.py`)
-
-Utiliza uma lógica determinística de gestão de inventário (sem regressão estatística), baseada no **lead time real** de cada produto:
-
-```
-vendas_diárias  = vendas_mensais / 30
-dias_stock      = quantidade_atual / vendas_diárias
-margem          = dias_stock − tempo_reposicao
-```
-
-A escala de risco é mapeada pela margem disponível face ao lead time:
-
-| Condição | Risco Previsto |
-|---|---|---|
-| `margem ≤ 0` | 100 % — ruptura iminente ou já em falta |
-| `0 < margem ≤ tempo_reposicao` | 75 % a 100 % — stock insuficiente para cobrir a encomenda |
-| `tempo_reposicao < margem ≤ 2× tempo_reposicao` | 40 % a 75 % — margem de segurança reduzida |
-| `margem > 2× tempo_reposicao` | 0 % a 40 % — situação confortável |
-
-> Esta abordagem determinística é propositada: a ruptura de stock tem uma resposta física exata (o stock acaba quando o consumo o esgota), pelo que um modelo estatístico introduziria ruído desnecessário em vez de aumentar a fiabilidade dos alertas.
+O modelo usa Regressão Linear (`scikit-learn`) com `MinMaxScaler`. Caso os dados não apresentem variação suficiente entre colaboradores, o valor direto da fórmula é utilizado sem ML, evitando instabilidade numérica. O resultado é gravado no campo `risco_saida` na base de dados.
 
 ---
 
-## Arquitetura do Pipeline
+**Modelo 2 — Previsão de Ruptura de Stock** (`ml_stock.py`)
+
+Utiliza uma lógica determinística baseada no lead time real de cada produto:
+
+```
+vendas_diárias = vendas_mensais / 30
+dias_stock     = quantidade_atual / vendas_diárias
+margem         = dias_stock − tempo_reposicao
+```
+
+| Condição | Risco Previsto |
+|---|---|
+| `margem ≤ 0` | 100 % — ruptura iminente ou já em falta |
+| `0 < margem ≤ tempo_reposicao` | 75 % a 100 % — stock insuficiente para cobrir encomenda |
+| `tempo_reposicao < margem ≤ 2× tempo_reposicao` | 40 % a 75 % — margem de segurança reduzida |
+| `margem > 2× tempo_reposicao` | 0 % a 40 % — situação confortável |
+
+> A abordagem determinística é intencional: a ruptura de stock tem uma resposta física exata, pelo que um modelo estatístico introduziria ruído sem aumentar a fiabilidade dos alertas.
+
+---
+
+## Arquitetura
 
 ```
 dados.xlsx
     │
     ▼
-[setup_db.py]   ─── Garante que a BD MySQL e todas as tabelas existem
+[setup_db.py]          →  Garante que a BD MySQL e todas as tabelas existem
     │
     ▼
-[sync.py]       ─── Excel → MySQL, sentido único (modo streaming read-only, só insere/atualiza o necessário)
+[sync.py]              →  Excel → MySQL (modo streaming, só insere/atualiza o necessário)
     │
     ▼
-[orq.py: recalcular_financeiros()]   ─── Garante consistência financeira (RH)
-[orq.py: recalcular_financeiros_stock()] ─── Garante consistência financeira (Stock)
+[orq.py]               →  Recalcula métricas financeiras de RH e Stock
     │
     ▼
-[ml_funcionarios.py]   ─── IA: Risco de saída → atualiza funcionarios.risco_saida
-[ml_stock.py]          ─── IA: Ruptura de stock → atualiza stock.previsao_ruptura
+[ml_funcionarios.py]   →  IA: índice de risco de saída → atualiza funcionarios.risco_saida
+[ml_stock.py]          →  IA: previsão de ruptura      → atualiza stock.previsao_ruptura
     │
     ▼
-[app.py]   ─── Portal Streamlit (painel interativo do utilizador)
+[app.py]               →  Portal Streamlit (painel interativo do gestor)
 ```
-
-### Ficheiros do Projeto
-
-| Ficheiro | Função |
-|---|---|
-| `app.py` | Interface visual interativa (Streamlit) |
-| `orq.py` | Orquestrador do pipeline completo |
-| `sync.py` | Sincronização Excel -> MySQL |
-| `setup_db.py` | Criação/verificação automática da base de dados |
-| `conect.py` | Configuração centralizada da ligação MySQL |
-| `ml_funcionarios.py` | Modelo ML — risco de saída de colaboradores |
-| `ml_stock.py` | Modelo ML — previsão de ruptura de inventário |
-| `dados.xlsx` | Fonte de dados inicial (alimenta o pipeline) |
-| `dados.xlsm` | Versão ligada ao MySQL |
 
 ---
 
 ## Pré-requisitos
 
-- **Python 3.8+**
+- **Python 3.8** ou superior
 - **MySQL Server** a correr localmente (XAMPP, WAMP ou instalação nativa)
+- Gestor de pacotes `pip`
 
-### Instalar Dependências
+---
+
+## Instalação e Configuração
+
+**1. Clonar o repositório**
+
+```bash
+git clone https://github.com/Souzana2/sige-projeto.git
+cd sige-projeto
+```
+
+**2. Instalar as dependências**
 
 ```bash
 pip install streamlit pandas mysql-connector-python scikit-learn openpyxl
 ```
 
-### Configurar a Ligação à Base de Dados
+**3. Configurar a ligação à base de dados**
 
 Edite o ficheiro `conect.py` com as suas credenciais MySQL:
 
@@ -171,11 +177,13 @@ DB_CONFIG = dict(
 )
 ```
 
+> A base de dados e todas as tabelas são criadas automaticamente na primeira execução pelo `setup_db.py`.
+
 ---
 
 ## Como Executar
 
-### Opção A — Pipeline Completo (Recomendado)
+### Opção A — Pipeline Completo (recomendado)
 
 Executa setup da BD, sincronização, recálculo financeiro, modelos de IA e abre o portal:
 
@@ -183,9 +191,7 @@ Executa setup da BD, sincronização, recálculo financeiro, modelos de IA e abr
 python orq.py
 ```
 
-### Opção B — Apenas o Portal (sem re-sincronizar)
-
-Se a BD já estiver atualizada:
+### Opção B — Apenas o Portal (BD já atualizada)
 
 ```bash
 streamlit run app.py
@@ -193,20 +199,37 @@ streamlit run app.py
 
 ### Flags do Orquestrador
 
-| Flag | Ação |
+| Comando | Ação |
 |---|---|
-| `python orq.py` | Pipeline completo + abre portal |
+| `python orq.py` | Pipeline completo + abre o portal |
 | `python orq.py --sem-portal` | Atualiza tudo mas não abre o portal |
 | `python orq.py --so-sync` | Apenas sincroniza Excel → MySQL |
 | `python orq.py --so-ml` | Apenas corre os dois modelos de IA |
-| `python orq.py --so-ml-func` | Apenas IA de funcionários |
+| `python orq.py --so-ml-func` | Apenas IA de colaboradores |
 | `python orq.py --so-ml-stock` | Apenas IA de stock |
 
-O portal fica disponível em: **http://localhost:8501**
+O portal fica disponível em **http://localhost:8501**.
 
 ---
 
-## Tecnologias Utilizadas
+## Estrutura do Projeto
+
+```
+.
+├── app.py               # Interface web interativa (Streamlit)
+├── orq.py               # Orquestrador do pipeline completo
+├── sync.py              # Sincronização Excel → MySQL
+├── setup_db.py          # Criação/verificação automática da base de dados
+├── conect.py            # Configuração centralizada da ligação MySQL
+├── ml_funcionarios.py   # Modelo ML — risco de saída de colaboradores
+├── ml_stock.py          # Modelo ML — previsão de ruptura de inventário
+├── dados.xlsx           # Fonte de dados de entrada (alimenta o pipeline)
+└── dados.xlsm           # Versão com fórmulas Excel (protótipo da fase 1)
+```
+
+---
+
+## Tecnologias
 
 | Tecnologia | Uso |
 |---|---|
@@ -217,3 +240,17 @@ O portal fica disponível em: **http://localhost:8501**
 | scikit-learn | Modelos de Machine Learning |
 | OpenPyXL | Leitura/escrita de ficheiros Excel |
 | Excel (xlsm) | Fase 1 — protótipo com fórmulas automáticas |
+
+---
+
+## Nota sobre o Ficheiro de Dados
+
+O ficheiro `dados.xlsx` é a **fonte de entrada única** do sistema. O pipeline opera exclusivamente no sentido **Excel → MySQL** — não há escrita de volta ao Excel.
+
+O ficheiro está estruturado apenas com os campos de preenchimento do gestor, sem colunas calculadas. A versão `dados.xlsm` é mantida separadamente como documento de análise e protótipo da fase 1 do projeto, com fórmulas avançadas ligadas à base de dados.
+
+---
+
+## Licença
+
+Este projeto está licenciado sob a [MIT License](LICENSE).
